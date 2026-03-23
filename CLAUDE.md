@@ -26,9 +26,9 @@ uv run python transcribe.py input.mp4 --model small
 uv run python -c "import ast, pathlib; ast.parse(pathlib.Path('transcribe.py').read_text()); print('OK')"
 ```
 
-## Functions to implement
+## Functions
 
-Implement exactly five functions in `transcribe.py`, in this order:
+Six functions plus one private helper in `transcribe.py`, in this order:
 
 ---
 
@@ -70,7 +70,7 @@ def extract_audio(input_path: str, wav_path: str) -> None:
 
 ### `transcribe(wav_path: str, model_name: str) -> dict`
 
-Load the Whisper model and transcribe the WAV file with word-level timestamps. Display a Rich spinner while running, with an elapsed `MM:SS` timer updated every second by a background thread (Whisper has no progress callback). Return the raw Whisper result dict, or `{}` if no speech is detected.
+Load the Whisper model and transcribe the WAV file with word-level timestamps. Display a Rich spinner while running, with an elapsed `MM:SS` timer updated every second by a background thread. Return the raw Whisper result dict, or `{}` if no speech is detected.
 
 **Whisper call parameters (exact):**
 - `word_timestamps=True`
@@ -80,66 +80,28 @@ Load the Whisper model and transcribe the WAV file with word-level timestamps. D
 
 **Segment count display:** After transcription, count punctuation-delimited segments (words ending in `.,;?!`) and print the count. Add 1 for any trailing word without punctuation.
 
-```python
-def transcribe(wav_path: str, model_name: str) -> dict:
-    """Transcribe wav_path with Whisper and print the segment count."""
-    console.print(f"[cyan]Loading Whisper model[/cyan] '{model_name}' …")
-    model = whisper.load_model(model_name)
+---
 
-    with console.status(f"[cyan]Transcribing audio using whisper {model_name} …[/cyan]", spinner="dots") as status:
-        import time as _time
+### `format_transcript(result: dict, plain: bool = False) -> str`
 
-        _t0 = _time.monotonic()
+Formats the Whisper result into one sentence per line with a `MM:SS` timestamp prefix. Uses word-level data to detect sentence boundaries (words ending in `.?!`). Calls `_fix_spacing()` on each sentence.
 
-        def _tick():
-            elapsed = _time.monotonic() - _t0
-            m, s = divmod(int(elapsed), 60)
-            status.update(f"[cyan]Transcribing audio using whisper {model_name} …[/cyan]  [dim]{m:02d}:{s:02d}[/dim]")
+- `plain=False` (default): timestamps are wrapped in Rich `[dim]...[/dim]` markup for terminal display.
+- `plain=True`: timestamps are bare text, suitable for file export.
 
-        _stop = threading.Event()
+Returns an empty string if `result` is empty.
 
-        def _timer():
-            while not _stop.wait(1):
-                _tick()
+---
 
-        _t = threading.Thread(target=_timer, daemon=True)
-        _t.start()
+### `_fix_spacing(text: str) -> str`
 
-        try:
-            result = model.transcribe(
-                wav_path,
-                word_timestamps=True,
-                temperature=0.1,
-                condition_on_previous_text=False,
-                fp16=False,
-            )
-        finally:
-            _stop.set()
-            _t.join()
-            _elapsed = _time.monotonic() - _t0
+Private helper. Removes spurious spaces before apostrophes in contractions (e.g. French `c 'est` → `c'est`) using a regex substitution.
 
-    _em, _es = divmod(int(_elapsed), 60)
+---
 
-    all_words = [
-        word
-        for seg in result.get("segments", [])
-        for word in seg.get("words", [])
-    ]
+### `export_transcript(result: dict, output_path: str) -> None`
 
-    if not all_words:
-        console.print(f"[green]Transcription complete in {_em:02d}:{_es:02d}.[/green] No speech detected.")
-        return {}
-
-    PUNCT = set(".,;?!")
-    count = sum(
-        1 for w in all_words if w["word"].rstrip() and w["word"].rstrip()[-1] in PUNCT
-    )
-    if all_words and (not all_words[-1]["word"].rstrip() or all_words[-1]["word"].rstrip()[-1] not in PUNCT):
-        count += 1
-
-    console.print(f"[green]Transcription complete in {_em:02d}:{_es:02d}.[/green] {count} segment(s) found.")
-    return result
-```
+Writes the raw Whisper result dict to a JSON file at `output_path`. Prints a Rich confirmation line on success.
 
 ---
 
@@ -171,41 +133,32 @@ Returns `{}` when no speech is detected.
 
 ---
 
-## Additional functions
-
-### `format_transcript(result: dict) -> str`
-
-Formats the Whisper result into a human-readable string for terminal display. Joins segment texts, trims whitespace, and returns a clean string. Returns an empty string if `result` is empty.
-
-### `export_transcript(result: dict, output_path: str) -> None`
-
-Writes the raw Whisper result dict to a JSON file at `output_path`. Prints a Rich confirmation line on success.
-
----
-
 ## CLI entry point (`main`)
 
-The CLI accepts an input file, an optional `--model` flag, and an optional `-r` / `--raw` flag.
+The CLI accepts an input file, an optional `--model` flag, and an optional `--output-format` flag.
 
-- **Default (no `-r`):** pretty-print the transcript to the terminal using `format_transcript()`.
-- **With `-r`:** export the raw Whisper JSON to a file named after the input (e.g. `input.mp3` → `input.json`) using `export_transcript()`.
+- **Default (no `--output-format`):** pretty-print the transcript to the terminal using `format_transcript()`.
+- **`--output-format raw`:** export the raw Whisper JSON to `<input>.json` using `export_transcript()`.
+- **`--output-format txt`:** export a plain-text formatted transcript to `<input>.txt` using `format_transcript(plain=True)`.
 
 ```
 transcribe input.mp3
 transcribe input.mp4 --model small
-transcribe input.mp3 -r
-transcribe -r input.mp3 --model small
+transcribe input.mp3 --output-format raw
+transcribe input.mp3 --output-format txt
 ```
 
 **Pipeline in `main()`:**
 
 1. Call `check_ffmpeg()`
 2. Validate the input file exists
-3. If input is `.wav`, use it directly; otherwise call `extract_audio()` into a `tempfile.mktemp(suffix=".wav")` path
-4. Call `transcribe(wav_path, model_name)`
-5. If `-r`: call `export_transcript(result, output_path)` where `output_path` is the input path with `.json` extension
-6. Otherwise: call `format_transcript(result)` and print it with Rich
-7. Delete the temp WAV in a `finally` block
+3. Validate the input file extension is supported; exit with error if not
+4. If input is `.wav`, use it directly; otherwise call `extract_audio()` into a `tempfile.mkstemp(suffix=".wav")` path
+5. Call `transcribe(wav_path, model_name)`
+6. If `--output-format raw`: call `export_transcript(result, output_path)` where `output_path` is the input path with `.json` extension
+7. If `--output-format txt`: write `format_transcript(result, plain=True)` to `<input>.txt`
+8. Otherwise: call `format_transcript(result)` and print it with Rich
+9. Delete the temp WAV in a `finally` block
 
 **Supported input extensions:** `.mp3`, `.mp4`, `.mov`, `.mkv`, `.m4a`, `.aac`, `.wav`
 
@@ -216,8 +169,8 @@ transcribe -r input.mp3 --model small
 | Arg | Default | Description |
 |---|---|---|
 | `input` | — | Input audio or video file |
-| `--model` | `medium` | Whisper model size (tiny/base/small/medium/large) |
-| `-r` / `--raw` | `False` | Export raw Whisper JSON to `<input>.json` instead of pretty-printing |
+| `--model` | `turbo` | Whisper model size (tiny/base/small/medium/large/turbo) |
+| `--output-format` | `None` | Export format: `raw` (JSON) or `txt` (plain text). Omit to print to terminal. |
 
 ---
 
@@ -248,15 +201,17 @@ include = ["transcribe.py"]
 
 ## Imports
 
-The file uses only stdlib and the two dependencies:
-
 ```python
 import argparse
+import json
+import os
+import re
 import shutil
 import subprocess
 import sys
 import tempfile
 import threading
+import time
 from pathlib import Path
 
 import whisper
@@ -276,4 +231,8 @@ uv run python transcribe.py test.mp3
 
 # Run on a test video file with a smaller model
 uv run python transcribe.py test.mp4 --model small
+
+# Export formats
+uv run python transcribe.py test.mp3 --output-format txt
+uv run python transcribe.py test.mp3 --output-format raw
 ```
