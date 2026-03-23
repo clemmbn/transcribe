@@ -10,13 +10,7 @@ CLI tool that transcribes audio and video files locally using [Whisper](https://
 ## Installation
 
 ```bash
-uv pip install .
-```
-
-Or run directly without installing:
-
-```bash
-uv run python transcribe.py input.mp3
+uv tool install https://github.com/clemmbn/transcribe
 ```
 
 ## Usage
