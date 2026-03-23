@@ -10,7 +10,7 @@ CLI tool that transcribes audio and video files locally using [Whisper](https://
 ## Installation
 
 ```bash
-uv tool install https://github.com/clemmbn/transcribe
+uv tool install git+https://github.com/clemmbn/transcribe
 ```
 
 ## Usage
